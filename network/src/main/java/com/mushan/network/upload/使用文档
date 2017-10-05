@@ -1,0 +1,91 @@
+        UploadOnSubscribe uploadOnSubscribe = new UploadOnSubscribe(file.getLength);
+        Flowable<Integer> progressObservale = Flowable.create(uploadOnSubscribe, BackpressureStrategy.BUFFER);
+
+//      创建表单主体
+        UploadRequestBody uploadRequestBody = new UploadRequestBody(file,uploadOnSubscribe);
+        MultipartBody.Part filePart =
+                MultipartBody.Part.createFormData("upload", file.getName(), uploadRequestBody);
+
+//      上传
+        Flowable uploadFlowable=RetrofitFactory.createService(uploadServiceClass).uploadFile(filePart);
+        Flowable.merge(progressObservale, uploadFlowable)
+                                .subscribeOn(Schedulers.io())
+                                .observeOn(AndroidSchedulers.mainThread())
+                                 .safeSubscribe(new UploadSubscriber<FileBean>(this) {
+                                                    @Override
+                                                    protected void onNext2(FileBean result) {
+                                                        Log.i("retrofit", "onNext=======>url:"+result.getUrl());
+                                                        tv.setText("上传成功:"+result.getUrl());
+                                                    }
+
+                                                    @Override
+                                                    protected void onProgress(Integer percent) {
+                                                        Log.i("retrofit", "onProgress======>"+percent);
+                                                        tv.setText("上传中:"+percent);
+                                                    }
+
+                                                    @Override
+                                                    protected void onError(int errorCode, String msg) {
+                                                        Log.i("retrofit", "onError======>"+msg);
+                                                        tv.setText("上传失败:"+msg);
+                                                    }
+                                                });
+
+
+
+            //以下部分为上传多个文件
+            public static <T> Flowable<Object> uploadFiles(ArrayList<File> files, Class<T> uploadsServiceClass, String uploadFucntionName, Object... params) {
+        //        总长度
+                long sumLength = 0l;
+                for (File file : files) {
+                    sumLength += file.length();
+                }
+
+        //      进度Observable
+                UploadOnSubscribe uploadOnSubscribe = new UploadOnSubscribe(sumLength);
+                Flowable<Integer> progressObservale = Flowable.create(uploadOnSubscribe, BackpressureStrategy.BUFFER);
+
+                ArrayList<MultipartBody.Part> fileParts = new ArrayList<>();
+
+                for (File file : files) {
+
+                    UploadRequestBody uploadRequestBody = new UploadRequestBody(file);
+        //          设置进度监听
+                    uploadRequestBody.setUploadOnSubscribe(uploadOnSubscribe);
+
+                    fileParts.add(MultipartBody.Part.createFormData("upload", file.getName(), uploadRequestBody));
+                }
+
+        //      上传
+                T service = RetrofitUtils.createService(uploadsServiceClass);
+
+                try {
+        //            获得上传方法的参数类型   和参数
+                    Class[] paramClasses = new Class[params.length + 1];
+                    Object[] uploadParams = new Object[params.length + 1];
+                    paramClasses[params.length] = ArrayList.class;
+                    uploadParams[params.length] = fileParts;
+                    for (int i = 0; i < params.length; i++) {
+                        paramClasses[i] = params[i].getClass();
+                        uploadParams[i] = params[i];
+                    }
+
+        //            获得上传方法
+                    Method uploadMethod = uploadsServiceClass.getMethod(uploadFucntionName, paramClasses);
+
+        //            运行上传方法
+                    Object o = uploadMethod.invoke(service, uploadParams);
+                    if (o instanceof Flowable) {
+                        Flowable uploadFlowable = (Flowable) o;
+
+        //              合并Observable
+                        return Flowable.merge(progressObservale, uploadFlowable)
+                                .subscribeOn(Schedulers.io())
+                                .observeOn(AndroidSchedulers.mainThread());
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return Flowable.error(e);
+                }
+                return Flowable.error(new ServerException("no upload method found or api service error", ServerException.ERROR_OTHER));
+            }
